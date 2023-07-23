@@ -210,6 +210,17 @@ func (yt *YouTube) Download(format Format, filePath string) (err error) {
 	return err
 }
 
+// GetSubtitlesXML get subtitles into XML format
+func (yt *YouTube) GetSubtitlesXML(track SubtitlesTrack) (subtitles string, err error) {
+	if len(yt.SubtitlesTracks) == 0 {
+		return "", errors.New("error: GetSubtitlesXML() SubtitlesTracks is empty")
+	}
+	if err = yt.getSubtitles(track); err != nil {
+		return "", err
+	}
+	return string(yt.responseSubtitlesBodyData), err
+}
+
 // GetSubtitlesPlainText get subtitles into only plain text, without timestamps
 func (yt *YouTube) GetSubtitlesPlainText(track SubtitlesTrack) (subtitles string, err error) {
 	if len(yt.SubtitlesTracks) == 0 {
@@ -252,6 +263,34 @@ func (yt *YouTube) GetSubtitlesJsonPretty(track SubtitlesTrack) (subtitles strin
 		return "", err
 	}
 	return string(s), err
+}
+
+// SaveSubtitlesJsonPretty save subtitles to file in pretty format
+func (yt *YouTube) SaveSubtitlesJsonPretty(track SubtitlesTrack, filePath string) (err error) {
+	jsonString, err := yt.GetSubtitlesJsonPretty(track)
+	if err != nil {
+		return err
+	}
+	if filePath == "" {
+		filePath = yt.VideoID
+	}
+
+	err = os.WriteFile(filePath+".json", []byte(jsonString), 777)
+	return err
+}
+
+// SaveSubtitlesXML save subtitles to file in XML format, plain format
+func (yt *YouTube) SaveSubtitlesXML(track SubtitlesTrack, filePath string) (err error) {
+	err = yt.getSubtitles(track)
+	if err != nil {
+		return err
+	}
+	if filePath == "" {
+		filePath = yt.VideoID
+	}
+
+	err = os.WriteFile(filePath+".xml", yt.responseSubtitlesBodyData, 777)
+	return err
 }
 
 func (yt *YouTube) convertResponseToYouTubeBodyDataToStruct() (err error) {
@@ -337,7 +376,7 @@ func (yt *YouTube) getSubtitles(track SubtitlesTrack) (err error) {
 		return err
 	}
 	if resp.StatusCode != http.StatusOK {
-		fmt.Printf("error: GetSubtitles() => resp.Status == %s", resp.Status)
+		fmt.Printf("error: GetSubtitles() => resp.StatusCode == %d", resp.StatusCode)
 		return nil
 	}
 	yt.responseSubtitlesBodyData, err = io.ReadAll(resp.Body)
