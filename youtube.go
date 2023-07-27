@@ -361,19 +361,18 @@ func (yt *YouTube) getSubtitles(track SubtitlesTrack) (err error) {
 	resp, err := http.Get(track.BaseURL)
 	defer readCloser(resp.Body)
 	if err != nil {
-		fmt.Println("error: GetSubtitles() http.Get(caption.BaseURL)")
+		fmt.Println("error: GetSubtitles() http.Get(track.BaseURL) ")
+		fmt.Println(err)
 		return err
 	}
 	if resp.StatusCode != http.StatusOK {
-		fmt.Printf("error: GetSubtitles() => resp.StatusCode == %d", resp.StatusCode)
-		return nil
+		err := fmt.Sprintf("error: StatusCode %d != http.StatusOK", resp.StatusCode)
+		return errors.New(err)
 	}
-	yt.responseSubtitlesBodyData, err = io.ReadAll(resp.Body)
-	if err != nil {
+	if yt.responseSubtitlesBodyData, err = io.ReadAll(resp.Body); err != nil{
 		return err
 	}
-	err = xml.Unmarshal(yt.responseSubtitlesBodyData, &yt.Subtitles)
-	return err
+	return xml.Unmarshal(yt.responseSubtitlesBodyData, &yt.Subtitles)
 }
 
 func readCloser(Body io.ReadCloser) {
