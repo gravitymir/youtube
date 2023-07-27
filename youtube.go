@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"github.com/fatih/color"
 	"io"
 	"math"
 	"net/http"
@@ -82,30 +83,30 @@ type YouTube struct {
 			Dur   string `xml:"dur,attr"`
 		} `xml:"text"`
 	}
-	responseToYouTubeBodyData []byte
-	responseSubtitlesBodyData []byte
+	ResponseToYouTubeBodyData []byte
+	ResponseSubtitlesBodyData []byte
 	countRequests             uint
 }
 
 const (
-	sleepDelayIfStatusCode403 = 1000
-	countRequestsConst        = 4
-	baseurl                   = "https://www.youtube.com/watch?v="
+	secondsSleepDelayIfStatusCode403 = 1
+	countRequestsConst               = 4
+	baseurl                          = "https://www.youtube.com/watch?v="
 	//embedurl                   = "https://www.youtube.com/embed/"
 	regexInitialPlayerResponse = `\{\"responseContext\".*?\"nanos\"\:[\d]+[\}]{4}`
 )
 
-// GetInfo init YouTube struct
+// Init YouTube struct
 // make Get request to web page YouTube
 // with video ID
-func GetInfo(ID string) (yt *YouTube, err error) {
+func Init(linkOrId string) (yt *YouTube, err error) {
 	yt = &YouTube{}
 	regex := regexp.MustCompile(`[a-zA-Z0-9-_]{11}`)
-	if regex.Match([]byte(ID)) != true {
-		return nil, errors.New("error: GetInfo() ID is doesn't match([a-zA-Z0-9-_]{11})")
+	if regex.Match([]byte(linkOrId)) != true {
+		return nil, errors.New("error: Init() ID is doesn't match([a-zA-Z0-9-_]{11})")
 	}
-	ID = string(regex.Find([]byte(ID)))
-	link := fmt.Sprintf("%s%s%s", baseurl, ID, "&hl=en")
+	yt.VideoID = string(regex.Find([]byte(linkOrId)))
+	link := fmt.Sprintf("%s%s%s", baseurl, yt.VideoID, "&hl=en")
 	if err = yt.getRequestToYouTube(link); err != nil {
 		return nil, err
 	}
@@ -125,27 +126,20 @@ func (yt *YouTube) getRequestToYouTube(URL string) error {
 	if res.StatusCode != http.StatusOK {
 		return errors.New(fmt.Sprintf("error getRequestToYouTube StatusCode is %d", res.StatusCode))
 	}
-	yt.responseToYouTubeBodyData, err = io.ReadAll(res.Body)
+	yt.ResponseToYouTubeBodyData, err = io.ReadAll(res.Body)
 	return err
 }
 
 type writeCounter struct {
-	ContentLength float64
-	Part          float64
+	contentLength int
+	part          int
+	currentChunk  int
+	timeStart     time.Time
+	videoID       string
 }
 
-func (wc *writeCounter) Write(p []byte) (int, error) {
-	n := len(p)
-	wc.Part += float64(n)
-	percent := math.Floor((wc.Part / wc.ContentLength) * 100)
-	downloads := strings.Repeat("█", int(percent/2)) //█ ▓ ▒ ░
-	spaces := strings.Repeat("░", 50-int(percent/2)) //█ ▓ ▒ ░
-	fmt.Printf("\rDownloading %s%s %.f%%", downloads, spaces, percent)
-	return n, nil
-}
-
+// Download try download file from YouTube
 func (yt *YouTube) Download(format Format, filePath string) (err error) {
-	//regex := regexp.MustCompile(`(\bvideo\b|\baudio\b/)(\bwebm\b|\bmp4\b)`)
 	regex := regexp.MustCompile(`\bwebm\b|\bmp4\b|\b3gp\b`)
 	if regex.Match([]byte(format.MimeType)) != true {
 		return errors.New("error: Download () Format don't recognised")
@@ -171,12 +165,12 @@ func (yt *YouTube) Download(format Format, filePath string) (err error) {
 		return err
 	}
 	defer readCloser(resp.Body)
-
 	if resp.StatusCode == 403 {
 		if yt.countRequests > 0 {
-			time.Sleep(sleepDelayIfStatusCode403)
+			time.Sleep(secondsSleepDelayIfStatusCode403 * time.Second)
 			yt.countRequests--
 			fmt.Println("error: StatusCode is 403, soon next try")
+
 			return yt.Download(format, filePath)
 		}
 		yt.countRequests = countRequestsConst
@@ -191,14 +185,21 @@ func (yt *YouTube) Download(format Format, filePath string) (err error) {
 		return errors.New(
 			fmt.Sprintf("error: resp.StatusCode != http.StatusOK: %d", resp.StatusCode))
 	}
+	contentLength, err := strconv.Atoi(resp.Header.Get("Content-Length"))
 
-	contentLength, err := strconv.ParseFloat(resp.Header["Content-Length"][0], 64)
 	if err != nil {
 		fmt.Println("error: strconv.ParseFloat")
 		return err
 	}
+	if contentLength == 0 {
+		return errors.New(
+			fmt.Sprintf("error: resp.Header.Get(\"Content-Length\") %d", contentLength))
+
+	}
 	counter := &writeCounter{
-		ContentLength: contentLength,
+		contentLength: contentLength,
+		timeStart:     time.Now(),
+		videoID:       yt.VideoID,
 	}
 	_, err = io.Copy(out, io.TeeReader(resp.Body, counter))
 	return err
@@ -212,7 +213,7 @@ func (yt *YouTube) GetSubtitlesXML(track SubtitlesTrack) (subtitles string, err 
 	if err = yt.getSubtitles(track); err != nil {
 		return "", err
 	}
-	return string(yt.responseSubtitlesBodyData), err
+	return string(yt.ResponseSubtitlesBodyData), err
 }
 
 // GetSubtitlesPlainText get subtitles into only plain text, without timestamps
@@ -283,13 +284,12 @@ func (yt *YouTube) SaveSubtitlesXML(track SubtitlesTrack, filePath string) (err 
 		filePath = yt.VideoID
 	}
 
-	err = os.WriteFile(filePath+".xml", yt.responseSubtitlesBodyData, 777)
+	err = os.WriteFile(filePath+".xml", yt.ResponseSubtitlesBodyData, 777)
 	return err
 }
-
 func (yt *YouTube) convertResponseToYouTubeBodyDataToStruct() (err error) {
 	playerResponse := regexp.MustCompile(regexInitialPlayerResponse)
-	if playerResponse.Match(yt.responseToYouTubeBodyData) != true {
+	if playerResponse.Match(yt.ResponseToYouTubeBodyData) != true {
 		return errors.New("error parser: can't find \"regexInitialPlayerResponse\"\n" +
 			"Could be YouTube change struct page\n" +
 			"If it true, need modify github.com/gravitymir/youtube, string 945")
@@ -326,13 +326,12 @@ func (yt *YouTube) convertResponseToYouTubeBodyDataToStruct() (err error) {
 		} `json:"captions"`
 		Details `json:"videoDetails"`
 	})
-	if err = json.Unmarshal(playerResponse.Find(yt.responseToYouTubeBodyData), cs); err != nil {
+	if err = json.Unmarshal(playerResponse.Find(yt.ResponseToYouTubeBodyData), cs); err != nil {
 		return err
 	}
 	yt.Status = cs.PlayabilityStatus.Status
 	yt.Reason = cs.PlayabilityStatus.ErrorScreen.PlayerErrorMessageRenderer.Reason.SimpleText
 	yt.Details = cs.Details
-
 	yt.VideoAndAudio = cs.StreamingData.Formats
 	for _, v := range append(cs.StreamingData.AdaptiveFormats) {
 		if v.Fps == 0 {
@@ -361,23 +360,79 @@ func (yt *YouTube) getSubtitles(track SubtitlesTrack) (err error) {
 	resp, err := http.Get(track.BaseURL)
 	defer readCloser(resp.Body)
 	if err != nil {
-		fmt.Println("error: GetSubtitles() http.Get(track.BaseURL) ")
-		fmt.Println(err)
 		return err
 	}
 	if resp.StatusCode != http.StatusOK {
 		err := fmt.Sprintf("error: StatusCode %d != http.StatusOK", resp.StatusCode)
 		return errors.New(err)
 	}
-	if yt.responseSubtitlesBodyData, err = io.ReadAll(resp.Body); err != nil{
+	if yt.ResponseSubtitlesBodyData, err = io.ReadAll(resp.Body); err != nil {
 		return err
 	}
-	return xml.Unmarshal(yt.responseSubtitlesBodyData, &yt.Subtitles)
+	return xml.Unmarshal(yt.ResponseSubtitlesBodyData, &yt.Subtitles)
 }
-
 func readCloser(Body io.ReadCloser) {
 	err := Body.Close()
 	if err != nil {
 		fmt.Println(err)
 	}
+}
+
+func (wc *writeCounter) Write(p []byte) (int, error) {
+	n := len(p)
+	amountChunks := wc.contentLength / n
+	wc.part += n
+	currentChunk := wc.part / n
+	aux := (float64(currentChunk) / float64(amountChunks)) * 100
+	percent := math.Floor(aux) //█ ▓ ▒ ░
+
+	elapsedTime := float64(time.Now().Sub(wc.timeStart))
+	chunksPerTime := float64(currentChunk) / elapsedTime
+	estimatedTotalTime := float64(amountChunks) / chunksPerTime
+	timeLeftInSeconds := (estimatedTotalTime - elapsedTime)
+
+	str := fmt.Sprintf("%s %s %s%s%s%s",
+		wc.videoID,
+		fmtDuration(time.Now().Sub(wc.timeStart)),
+		fmtDuration(time.Duration(uint64(timeLeftInSeconds))),
+		humanizeContentLength(wc.contentLength),
+		humanizeContentLength(wc.part),
+		fmt.Sprintf("%4.f%%", percent))
+
+	fmt.Printf("\r%s",
+		decorateDownloadLine(
+			str[:int(percent/2)],
+			str[int(percent/2):],
+		),
+	)
+	//fmt.Println(utf8.RuneCountInString(str))
+	if percent == float64(100) {
+		fmt.Println()
+	}
+	return n, nil
+}
+func humanizeContentLength(b int) string {
+	const unit = 1024
+
+	div, exp := unit, 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%6.1f%cB",
+		float64(b)/float64(div), "KMGTPE"[exp])
+}
+func decorateDownloadLine(revers, white string) string {
+	return fmt.Sprintf("%s%s",
+		color.New(color.ReverseVideo).SprintFunc()(revers),
+		color.New(color.BgWhite, color.Bold).SprintFunc()(white),
+	)
+}
+func fmtDuration(d time.Duration) string {
+	h := d / time.Hour
+	d -= h * time.Hour
+	m := d / time.Minute
+	d -= m * time.Minute
+	s := d / time.Second
+	return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
 }
