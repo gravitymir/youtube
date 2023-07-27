@@ -100,6 +100,11 @@ const (
 // with video ID
 func GetInfo(ID string) (yt *YouTube, err error) {
 	yt = &YouTube{}
+	regex := regexp.MustCompile(`[a-zA-Z0-9-_]{11}`)
+	if regex.Match([]byte(ID)) != true {
+		return nil, errors.New("error: GetInfo() ID is doesn't match([a-zA-Z0-9-_]{11})")
+	}
+	ID = string(regex.Find([]byte(ID)))
 	link := fmt.Sprintf("%s%s%s", baseurl, ID, "&hl=en")
 	if err = yt.getRequestToYouTube(link); err != nil {
 		return nil, err
@@ -112,12 +117,7 @@ func GetInfo(ID string) (yt *YouTube, err error) {
 }
 func (yt *YouTube) getRequestToYouTube(URL string) error {
 	res, err := http.Get(URL)
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			fmt.Println(err)
-		}
-	}(res.Body)
+	defer readCloser(res.Body)
 
 	if err != nil {
 		return err
@@ -129,12 +129,12 @@ func (yt *YouTube) getRequestToYouTube(URL string) error {
 	return err
 }
 
-type WriteCounter struct {
+type writeCounter struct {
 	ContentLength float64
 	Part          float64
 }
 
-func (wc *WriteCounter) Write(p []byte) (int, error) {
+func (wc *writeCounter) Write(p []byte) (int, error) {
 	n := len(p)
 	wc.Part += float64(n)
 	percent := math.Floor((wc.Part / wc.ContentLength) * 100)
@@ -150,12 +150,12 @@ func (yt *YouTube) Download(format Format, filePath string) (err error) {
 	if regex.Match([]byte(format.MimeType)) != true {
 		return errors.New("error: Download () Format don't recognised")
 	}
-	typeExt := regex.Find([]byte(format.MimeType))
+	fileExt := "." + string(regex.Find([]byte(format.MimeType)))
 
 	if filePath == "" {
 		filePath = yt.VideoID
 	}
-	out, err := os.Create(filePath + "." + string(typeExt))
+	out, err := os.Create(filePath + fileExt)
 	if err != nil {
 		return err
 	}
@@ -170,12 +170,7 @@ func (yt *YouTube) Download(format Format, filePath string) (err error) {
 		fmt.Println("error: http.Get(format.URL)")
 		return err
 	}
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			fmt.Println(err)
-		}
-	}(resp.Body)
+	defer readCloser(resp.Body)
 
 	if resp.StatusCode == 403 {
 		if yt.countRequests > 0 {
@@ -183,11 +178,10 @@ func (yt *YouTube) Download(format Format, filePath string) (err error) {
 			yt.countRequests--
 			fmt.Println("error: StatusCode is 403, soon next try")
 			return yt.Download(format, filePath)
-		} else {
-			yt.countRequests = countRequestsConst
-			return errors.New(
-				fmt.Sprintf("error: Download() imposible StatusCode = %d", resp.StatusCode))
 		}
+		yt.countRequests = countRequestsConst
+		return errors.New(
+			fmt.Sprintf("error: Download() imposible StatusCode = %d", resp.StatusCode))
 	} else {
 		yt.countRequests = countRequestsConst
 	}
@@ -203,7 +197,7 @@ func (yt *YouTube) Download(format Format, filePath string) (err error) {
 		fmt.Println("error: strconv.ParseFloat")
 		return err
 	}
-	counter := &WriteCounter{
+	counter := &writeCounter{
 		ContentLength: contentLength,
 	}
 	_, err = io.Copy(out, io.TeeReader(resp.Body, counter))
@@ -365,12 +359,7 @@ func (yt *YouTube) getSubtitles(track SubtitlesTrack) (err error) {
 		return errors.New("error: GetSubtitles() SubtitlesTracks is empty")
 	}
 	resp, err := http.Get(track.BaseURL)
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			fmt.Println(err)
-		}
-	}(resp.Body)
+	defer readCloser(resp.Body)
 	if err != nil {
 		fmt.Println("error: GetSubtitles() http.Get(caption.BaseURL)")
 		return err
@@ -385,4 +374,11 @@ func (yt *YouTube) getSubtitles(track SubtitlesTrack) (err error) {
 	}
 	err = xml.Unmarshal(yt.responseSubtitlesBodyData, &yt.Subtitles)
 	return err
+}
+
+func readCloser(Body io.ReadCloser) {
+	err := Body.Close()
+	if err != nil {
+		fmt.Println(err)
+	}
 }
