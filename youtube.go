@@ -98,7 +98,7 @@ type YouTube struct {
 }
 
 const (
-	baseurl                          = "https://www.youtube.com/watch?v="
+	baseurl = "https://www.youtube.com/watch?v="
 	//embedurl                   = "https://www.youtube.com/embed/"
 	regexInitialPlayerResponse = `\{\"responseContext\".*?\"nanos\"\:[\d]+[\}]{4}`
 	lengthFilepathExtPrint     = 56
@@ -353,6 +353,34 @@ func (yt *YouTube) SaveDetailsPretty(filePath string) (err error) {
 	err = os.WriteFile(filePath, details, 777)
 	return err
 }
+
+// SaveThumbnail g
+func (yt *YouTube) SaveThumbnailJPG(filePath string) (err error) {
+	if filePath == "" {
+		filePath = yt.VideoID + ".jpg"
+	}
+
+	thumb := yt.Details.Thumbnail.Thumbnails[len(yt.Details.Thumbnail.Thumbnails)-1]
+	resp, err := http.Get(thumb.URL)
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			fmt.Errorf("SaveThumbnailJPG %e", err)
+		}
+	}(resp.Body)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return errors.New("StatusCode is: " + resp.Status)
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	err = os.WriteFile(filePath, []byte(data), 777)
+	return err
+}
 func (yt *YouTube) convertResponseToYouTubeBodyDataToStruct() (err error) {
 	playerResponse := regexp.MustCompile(regexInitialPlayerResponse)
 	if playerResponse.Match(yt.ResponseToYouTubeBodyData) != true {
@@ -443,7 +471,6 @@ func readCloser(Body io.ReadCloser) {
 		fmt.Println(err)
 	}
 }
-
 func (wc *writeCounter) Write(p []byte) (int, error) {
 	n := len(p)
 	amountChunks := wc.contentLength / n
